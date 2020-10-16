@@ -1,0 +1,4 @@
+namespace = "development"
+app_label = "coordinator"
+config = "test_case/config.toml"
+# image = "xaynetwork/xaynet:development"

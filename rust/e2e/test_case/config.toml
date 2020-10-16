@@ -2,7 +2,7 @@
 filter = "xaynet=debug,http=warn,info"
 
 [api]
-bind_address = "0.0.0.0:8081"
+bind_address = "127.0.0.1:8081"
 tls_certificate = "/app/ssl/tls.pem"
 tls_key = "/app/ssl/tls.key"
 
@@ -23,16 +23,17 @@ bound_type = "B0"
 model_type = "M3"
 
 [model]
-size = 10
+size = 1
 
 [metrics.influxdb]
 url = "http://influxdb:8086"
 db = "metrics"
 
 [redis]
-url = "redis://redis"
+url = "redis://127.0.0.1/"
 
 [s3]
 access_key = "minio"
 secret_access_key = "minio123"
-region = ["minio", "http://minio:9000"]
+region = ["minio", "http://localhost:9000"]
+

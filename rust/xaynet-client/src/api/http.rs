@@ -20,7 +20,7 @@ use xaynet_core::{
     UpdateSeedDict,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 /// A client that communicates with the coordinator's API via HTTP(S).
 pub struct HttpApiClient {
     /// HTTP client

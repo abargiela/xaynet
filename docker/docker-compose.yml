@@ -5,6 +5,8 @@ services:
     build:
       context: ..
       dockerfile: docker/Dockerfile
+      args:
+        COORDINATOR_FEATURES: metrics
     depends_on:
       - minio
       - redis
@@ -31,8 +33,8 @@ services:
       - influxdb-data:/var/lib/influxdb
     networks:
       - xaynet
-    expose:
-      - "8086"
+    ports:
+      - "8086:8086"
 
   minio:
     image: minio/minio

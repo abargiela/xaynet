@@ -10,4 +10,5 @@ members = [
     # Internal
     "examples",
     "benches",
+    "e2e",
 ]

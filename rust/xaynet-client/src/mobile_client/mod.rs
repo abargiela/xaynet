@@ -233,10 +233,10 @@ pub enum ClientStateName {
     Sum2,
 }
 
-struct LocalModelCache(Option<Model>);
+pub struct LocalModelCache(pub Option<Model>);
 
 impl LocalModelCache {
-    fn set_local_model(&mut self, model: Model) {
+    pub fn set_local_model(&mut self, model: Model) {
         self.0 = Some(model);
     }
 }

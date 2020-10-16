@@ -31,7 +31,7 @@ pub const ENCRYPTION_HEADER_LENGTH: usize = xaynet_core::crypto::SEALBYTES;
 pub const MIN_MESSAGE_SIZE: usize =
     MESSAGE_HEADER_LENGTH + ENCRYPTION_HEADER_LENGTH + MINIMUM_PAYLOAD_SIZE;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct AggregationConfig {
     pub mask: MaskConfig,
     pub scalar: f64,
