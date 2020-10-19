@@ -4,6 +4,7 @@ use std::path::PathBuf;
 use std::process;
 use tracing_subscriber::{fmt::Formatter, reload::Handle, EnvFilter, *};
 use xaynet_client::{api::HttpApiClient, mobile_client::participant::MaxMessageSize};
+use xaynet_server::settings::InfluxSettings;
 use xaynet_server::settings::Settings;
 
 #[macro_use]
@@ -14,6 +15,7 @@ mod test_client;
 use test_client::{TestClientBuilder, TestClientBuilderSettings};
 mod term;
 mod utils;
+use utils::TestEnvironment;
 
 #[cfg(feature = "k8s")]
 mod k8s;
@@ -27,6 +29,12 @@ async fn main() -> anyhow::Result<()> {
     let filter_handle = fmt_subscriber.reload_handle();
     fmt_subscriber.init();
 
+    let coordinator_settings = Settings::new(PathBuf::from("test_case/config.toml"))
+        .unwrap_or_else(|err| {
+            error!("{}", err);
+            process::exit(1);
+        });
+
     #[cfg(feature = "k8s")]
     let (mut coordinator_handle, mut influx_handle) = {
         let k8s_settings = k8s::K8sSettings::new(PathBuf::from("test_case/k8s.toml"))
@@ -39,28 +47,7 @@ async fn main() -> anyhow::Result<()> {
         (coordinator_handle, influx_handle)
     };
 
-    let coordinator_settings = Settings::new(PathBuf::from("test_case/config.toml"))
-        .unwrap_or_else(|err| {
-            error!("{}", err);
-            process::exit(1);
-        });
-
-    // check for phase metrics
-    let influx_client = Client::new(
-        "http://localhost:8086",
-        coordinator_settings.metrics.influxdb.db.clone(),
-    );
-    utils::wait_until_phase(&influx_client, 1).await;
-
-    let http_client = HttpApiClient::new("http://localhost:8081")?;
-    utils::wait_until_coordinator_is_ready(http_client).await;
-
-    let influx_client = Client::new(
-        "http://localhost:8086",
-        coordinator_settings.metrics.influxdb.db.clone(),
-    );
-
-    let _ = run_rounds(coordinator_settings, filter_handle, &influx_client).await;
+    let _ = run_rounds(coordinator_settings, filter_handle).await;
 
     #[cfg(feature = "k8s")]
     {
@@ -75,31 +62,44 @@ async fn main() -> anyhow::Result<()> {
 async fn run_rounds(
     coordinator_settings: Settings,
     filter_handle: Handle<EnvFilter, Formatter>,
-    influx_client: &Client,
 ) -> anyhow::Result<()> {
+    let mut test_env = TestEnvironment::new()
+        .with_api_client("http://localhost:8081")?
+        .with_influx_client(InfluxSettings {
+            url: "http://localhost:8086".to_string(),
+            db: coordinator_settings.metrics.influxdb.db.clone(),
+        });
+    test_env.pre_checks().await;
+
+    let influx_client = test_env.get_influx_client();
+    let api_client = test_env.get_api_client();
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+
     let test_client_builder_settings = TestClientBuilderSettings::from_coordinator_settings(
         coordinator_settings,
-        "http://localhost:8081",
         1_f64,
         MaxMessageSize::unlimited(),
     );
 
-    let mut test_client_builder = TestClientBuilder::new(test_client_builder_settings)?;
+    let mut test_client_builder = TestClientBuilder::new(test_client_builder_settings, api_client);
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////
 
     for _ in 0..10 {
         let mut runner = test_client_builder
             .build_clients(filter_handle.clone())
             .await?;
-        utils::wait_until_phase(influx_client, 1).await;
+        utils::wait_until_phase(&influx_client, 1).await;
         info!("run sum clients...");
         runner.run_sum_clients().await?;
-        utils::wait_until_phase(influx_client, 2).await;
+        utils::wait_until_phase(&influx_client, 2).await;
         info!("run update clients...");
         runner.run_update_clients().await?;
-        utils::wait_until_phase(influx_client, 3).await;
+        utils::wait_until_phase(&influx_client, 3).await;
         info!("run sum2 clients...");
         runner.run_sum2_clients().await?;
-        utils::wait_until_phase(influx_client, 1).await;
+        utils::wait_until_phase(&influx_client, 1).await;
     }
 
     Ok(())

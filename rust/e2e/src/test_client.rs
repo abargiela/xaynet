@@ -25,13 +25,13 @@ pub struct TestClient {
 
 impl TestClient {
     pub fn new(
-        http_client: HttpApiClient,
+        api_client: HttpApiClient,
         participant_settings: ParticipantSettings,
     ) -> anyhow::Result<Self> {
         let client_state = ClientStateMachine::new(participant_settings)?;
 
         Ok(Self {
-            api: http_client,
+            api: api_client,
             client_state,
             local_model: LocalModelCache(None),
         })
@@ -72,13 +72,11 @@ pub struct TestClientBuilderSettings {
     number_of_sum: u64,
     number_of_update: u64,
     model_size: usize,
-    url: String,
 }
 
 impl TestClientBuilderSettings {
     pub fn from_coordinator_settings(
         coordinator_settings: xaynet_server::settings::Settings,
-        url: &str,
         scalar: f64,
         max_message_size: MaxMessageSize,
     ) -> Self {
@@ -95,22 +93,21 @@ impl TestClientBuilderSettings {
             number_of_sum: coordinator_settings.pet.min_sum_count,
             number_of_update: coordinator_settings.pet.min_update_count,
             model_size: coordinator_settings.model.size,
-            url: url.to_string(),
         }
     }
 }
 
 pub struct TestClientBuilder {
     settings: TestClientBuilderSettings,
-    http_client: HttpApiClient,
+    api_client: HttpApiClient,
 }
 
 impl TestClientBuilder {
-    pub fn new(settings: TestClientBuilderSettings) -> anyhow::Result<Self> {
-        Ok(Self {
-            http_client: HttpApiClient::new(&settings.url.clone())?,
+    pub fn new(settings: TestClientBuilderSettings, api_client: HttpApiClient) -> Self {
+        Self {
+            api_client,
             settings,
-        })
+        }
     }
 
     pub async fn build_sum_clients(
@@ -118,7 +115,7 @@ impl TestClientBuilder {
     ) -> anyhow::Result<ConcurrentFutures<Pin<Box<dyn Future<Output = TestClient> + Send + 'static>>>>
     {
         let update_sender = ProgressBar::new(self.settings.number_of_sum, "sum participants");
-        let round_params = self.http_client.get_round_params().await?;
+        let round_params = self.api_client.get_round_params().await?;
 
         let mut sum_clients = ConcurrentFutures::<
             Pin<Box<dyn Future<Output = TestClient> + Send + 'static>>,
@@ -126,7 +123,7 @@ impl TestClientBuilder {
         for _ in 0..self.settings.number_of_sum {
             let sum_client = build_sum_client(
                 round_params.clone(),
-                self.http_client.clone(),
+                self.api_client.clone(),
                 self.settings.test_client_settings.clone(),
             )?;
             sum_clients.push(Box::pin(async {
@@ -144,7 +141,7 @@ impl TestClientBuilder {
     ) -> anyhow::Result<ConcurrentFutures<Pin<Box<dyn Future<Output = TestClient> + Send + 'static>>>>
     {
         let update_sender = ProgressBar::new(self.settings.number_of_update, "update participants");
-        let round_params = self.http_client.get_round_params().await?;
+        let round_params = self.api_client.get_round_params().await?;
 
         let mut update_clients = ConcurrentFutures::<
             Pin<Box<dyn Future<Output = TestClient> + Send + 'static>>,
@@ -154,7 +151,7 @@ impl TestClientBuilder {
         for _ in 0..self.settings.number_of_update {
             let mut update_client = build_update_client(
                 round_params.clone(),
-                self.http_client.clone(),
+                self.api_client.clone(),
                 self.settings.test_client_settings.clone(),
             )?;
             update_client.set_local_model(model.clone());
@@ -211,21 +208,21 @@ fn new_client(round_params: &RoundParameters) -> (ClientStateName, ParticipantSe
 
 fn build_client(
     participant_settings: ParticipantSettings,
-    http_client: HttpApiClient,
+    api_client: HttpApiClient,
 ) -> anyhow::Result<TestClient> {
-    TestClient::new(http_client, participant_settings)
+    TestClient::new(api_client, participant_settings)
 }
 
 fn build_sum_client(
     round_params: RoundParameters,
-    http_client: HttpApiClient,
+    api_client: HttpApiClient,
     test_client_settings: TestClientSettings,
 ) -> anyhow::Result<TestClient> {
     loop {
         if let (ClientStateName::Sum, secret_key) = new_client(&round_params) {
             let sum_client = build_client(
                 test_client_settings.into_participant_settings(secret_key),
-                http_client,
+                api_client,
             )?;
             break Ok(sum_client);
         }
@@ -234,14 +231,14 @@ fn build_sum_client(
 
 fn build_update_client(
     round_params: RoundParameters,
-    http_client: HttpApiClient,
+    api_client: HttpApiClient,
     test_client_settings: TestClientSettings,
 ) -> anyhow::Result<TestClient> {
     loop {
         if let (ClientStateName::Update, secret_key) = new_client(&round_params) {
             let update_client = build_client(
                 test_client_settings.into_participant_settings(secret_key),
-                http_client,
+                api_client,
             )?;
             break Ok(update_client);
         }
