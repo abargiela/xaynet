@@ -74,6 +74,13 @@ impl Phase for PhaseState<Unmask> {
                 .upload_global_model(&key, &global_model)
                 .await
                 .map_err(PhaseStateError::SaveGlobalModel)?;
+            self.shared
+                .io
+                .redis
+                .connection()
+                .await
+                .update_latest_global_model_id(&key)
+                .await;
         }
 
         info!("broadcasting the new global model");

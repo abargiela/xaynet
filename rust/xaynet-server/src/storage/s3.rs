@@ -5,6 +5,9 @@ use rusoto_s3::{
     CreateBucketOutput,
     CreateBucketRequest,
     DeleteObjectsError,
+    GetObjectError,
+    GetObjectOutput,
+    GetObjectRequest,
     ListObjectsV2Error,
     PutObjectError,
     PutObjectOutput,
@@ -15,6 +18,7 @@ use rusoto_s3::{
 };
 use std::sync::Arc;
 use thiserror::Error;
+use tokio::io::AsyncReadExt;
 
 use xaynet_core::mask::Model;
 
@@ -26,6 +30,8 @@ pub enum S3Error {
     Upload(#[from] RusotoError<PutObjectError>),
     #[error("create bucket error: {0}")]
     CreateBucket(#[from] RusotoError<CreateBucketError>),
+    #[error("download: error: {0}")]
+    Download(#[from] RusotoError<GetObjectError>),
     #[error("list objects error: {0}")]
     ListObjects(#[from] RusotoError<ListObjectsV2Error>),
     #[error("delete objects error: {0}")]
@@ -103,13 +109,51 @@ impl Client {
 
     /// Creates the `global_models` bucket.
     pub async fn create_global_models_bucket(&self) -> S3Result<()> {
-        debug!("create global-models bucket");
-        match self.create_bucket("global-models").await {
+        debug!("create {} bucket", &self.buckets.global_models);
+        match self.create_bucket(&self.buckets.global_models).await {
             Ok(_)
             | Err(RusotoError::Service(CreateBucketError::BucketAlreadyExists(_)))
             | Err(RusotoError::Service(CreateBucketError::BucketAlreadyOwnedByYou(_))) => Ok(()),
             Err(err) => Err(S3Error::from(err)),
         }
+    }
+
+    /// Download a global model with the given key.
+    pub async fn download_global_model(&self, key: &str) -> S3Result<Model> {
+        debug!("download global model {}", key);
+        let object = self
+            .download_object(&self.buckets.global_models, key)
+            .await?;
+        let content = Self::unpack_object(object).await?;
+        Ok(bincode::deserialize(&content)?)
+    }
+
+    // Get the content of the given object.
+    async fn unpack_object(object: GetObjectOutput) -> S3Result<Vec<u8>> {
+        let mut content = Vec::new();
+        object
+            .body
+            .ok_or(S3Error::EmptyResponse)?
+            .into_async_read()
+            .read_to_end(&mut content)
+            .await
+            .map_err(|_| S3Error::EmptyResponse)?;
+        Ok(content)
+    }
+
+    // Download an object from the given bucket.
+    async fn download_object(
+        &self,
+        bucket: &str,
+        key: &str,
+    ) -> Result<GetObjectOutput, RusotoError<GetObjectError>> {
+        // If an object does not exist, aws will return an error
+        let req = GetObjectRequest {
+            bucket: bucket.to_string(),
+            key: key.to_string(),
+            ..Default::default()
+        };
+        self.s3_client.get_object(req).await
     }
 
     // Uploads an object to the given bucket.
@@ -150,14 +194,12 @@ pub(in crate) mod tests {
         Delete,
         DeleteObjectsOutput,
         DeleteObjectsRequest,
-        GetObjectOutput,
-        GetObjectRequest,
         ListObjectsV2Output,
         ListObjectsV2Request,
         ObjectIdentifier,
     };
     use serial_test::serial;
-    use tokio::io::AsyncReadExt;
+
     use xaynet_core::{common::RoundSeed, crypto::ByteObject};
 
     impl Client {
@@ -181,14 +223,6 @@ pub(in crate) mod tests {
                 }
             }
             Ok(())
-        }
-
-        // Download a global model.
-        pub async fn download_global_model(&self, key: &str) -> Model {
-            debug!("get global model {:?}", key);
-            let object = self.download_object(&self.buckets.global_models, key).await;
-            let content = Self::unpack_object(object).await.expect("unpack error");
-            bincode::deserialize(&content).expect("deserialization error")
         }
 
         // Unpacks the object identifier/keys of a [`ListObjectsV2Output`] response.
@@ -262,33 +296,6 @@ pub(in crate) mod tests {
             } else {
                 None
             }
-        }
-
-        // Get the content of the given object.
-        async fn unpack_object(object: GetObjectOutput) -> S3Result<Vec<u8>> {
-            let mut content = Vec::new();
-            object
-                .body
-                .ok_or(S3Error::EmptyResponse)?
-                .into_async_read()
-                .read_to_end(&mut content)
-                .await
-                .map_err(|_| S3Error::EmptyResponse)?;
-            Ok(content)
-        }
-
-        /// Download an object from the given bucket.
-        async fn download_object(&self, bucket: &str, key: &str) -> GetObjectOutput {
-            // If an object does not exist, aws will return an error
-            let req = GetObjectRequest {
-                bucket: bucket.to_string(),
-                key: key.to_string(),
-                ..Default::default()
-            };
-            self.s3_client
-                .get_object(req)
-                .await
-                .expect("download error")
         }
     }
 

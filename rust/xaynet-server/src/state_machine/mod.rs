@@ -99,18 +99,9 @@ pub mod requests;
 
 use self::{
     coordinator::CoordinatorState,
-    events::{EventPublisher, EventSubscriber},
+    events::{EventPublisher, EventSubscriber, ModelUpdate},
     phases::{
-        Idle,
-        Phase,
-        PhaseName,
-        PhaseState,
-        PhaseStateError,
-        Shared,
-        Shutdown,
-        Sum,
-        Sum2,
-        Unmask,
+        Idle, Phase, PhaseName, PhaseState, PhaseStateError, Shared, Shutdown, Sum, Sum2, Unmask,
         Update,
     },
     requests::{RequestReceiver, RequestSender},
@@ -121,7 +112,10 @@ use crate::{
 };
 use derive_more::From;
 use thiserror::Error;
-use xaynet_core::{mask::UnmaskingError, InitError};
+use xaynet_core::mask::UnmaskingError;
+
+#[cfg(feature = "model-persistence")]
+use xaynet_core::mask::Model;
 
 #[cfg(feature = "metrics")]
 use crate::metrics::MetricsSender;
@@ -189,64 +183,6 @@ where
     PhaseState<PhaseStateError>: Phase,
     PhaseState<Shutdown>: Phase,
 {
-    /// Creates a new state machine with the initial state [`Idle`].
-    ///
-    /// # Errors
-    ///
-    /// Fails if there is insufficient system entropy to generate secrets.
-    ///
-    /// <div class="information">
-    ///     <div class="tooltip ignore" style="">ⓘ<span class="tooltiptext">Note</span></div>
-    /// </div>
-    /// <div class="example-wrap" style="display:inline-block">
-    /// <pre class="ignore" style="white-space:normal;font:inherit;">
-    ///     <strong>Note</strong>: If the <code>StateMachine</code> is created via
-    ///     <code>PhaseState::<S>::new(...)</code> it must be ensured that the module
-    ///     <a href="https://docs.rs/sodiumoxide/0.2.5/sodiumoxide/fn.init.html">
-    ///     <code>sodiumoxide::init()</code></a> has been initialized beforehand.
-    /// </pre></div>
-    ///
-    /// For example:
-    /// ```compile_fail
-    /// sodiumoxide::init().unwrap();
-    /// let state_machine =
-    ///     StateMachine::from(PhaseState::<Idle>::new(coordinator_state, req_receiver));
-    /// ```
-    pub fn new(
-        pet_settings: PetSettings,
-        mask_settings: MaskSettings,
-        model_settings: ModelSettings,
-        redis: redis::Client,
-        #[cfg(feature = "model-persistence")] s3: s3::Client,
-        #[cfg(feature = "metrics")] metrics_tx: MetricsSender,
-    ) -> Result<(Self, RequestSender, EventSubscriber), InitError> {
-        // crucial: init must be called before anything else in this module
-        sodiumoxide::init().or(Err(InitError))?;
-
-        let coordinator_state = CoordinatorState::new(pet_settings, mask_settings, model_settings);
-        let (event_publisher, event_subscriber) = EventPublisher::init(
-            coordinator_state.round_id,
-            coordinator_state.keys.clone(),
-            coordinator_state.round_params.clone(),
-            PhaseName::Idle,
-        );
-        let (req_receiver, handle) = RequestReceiver::new();
-
-        let shared = Shared::new(
-            coordinator_state,
-            event_publisher,
-            req_receiver,
-            redis,
-            #[cfg(feature = "model-persistence")]
-            s3,
-            #[cfg(feature = "metrics")]
-            metrics_tx,
-        );
-
-        let state_machine = StateMachine::from(PhaseState::<Idle>::new(shared));
-        Ok((state_machine, handle, event_subscriber))
-    }
-
     /// Moves the [`StateMachine`] to the next state and consumes the current one.
     /// Returns the next state or `None` if the [`StateMachine`] reached the state [`Shutdown`].
     pub async fn next(self) -> Option<Self> {
@@ -267,6 +203,228 @@ where
         loop {
             self = self.next().await?;
         }
+    }
+}
+
+type StateMachineInitializationResult<T> = Result<T, StateMachineInitializationError>;
+
+#[derive(Debug, Error)]
+pub enum StateMachineInitializationError {
+    #[error("redis request failed: {0}")]
+    Redis(#[from] RedisError),
+    #[error("failed to initialize crypto library")]
+    Crypto,
+    #[error("GlobalModelUnavailable")]
+    GlobalModelUnavailable,
+    #[error("GlobalModelInvalid")]
+    GlobalModelInvalid(String),
+}
+
+pub struct StateMachineInitializer {
+    pet_settings: PetSettings,
+    mask_settings: MaskSettings,
+    model_settings: ModelSettings,
+    redis_handle: redis::Client,
+
+    #[cfg(feature = "model-persistence")]
+    s3_handle: s3::Client,
+    #[cfg(feature = "metrics")]
+    metrics_handle: MetricsSender,
+}
+
+impl StateMachineInitializer {
+    pub fn new(
+        pet_settings: PetSettings,
+        mask_settings: MaskSettings,
+        model_settings: ModelSettings,
+        redis_handle: redis::Client,
+        #[cfg(feature = "model-persistence")] s3_handle: s3::Client,
+        #[cfg(feature = "metrics")] metrics_handle: MetricsSender,
+    ) -> Self {
+        Self {
+            pet_settings,
+            mask_settings,
+            model_settings,
+            redis_handle,
+            #[cfg(feature = "model-persistence")]
+            s3_handle,
+            #[cfg(feature = "metrics")]
+            metrics_handle,
+        }
+    }
+
+    #[cfg(not(feature = "model-persistence"))]
+    /// Initializes a new [`StateMachine`] from scratch.
+    pub async fn init(
+        self,
+    ) -> StateMachineInitializationResult<(StateMachine, RequestSender, EventSubscriber)> {
+        // crucial: init must be called before anything else in this module
+        // maybe we should create a wrapper around that function and put this into the xaynet::core crate
+        sodiumoxide::init().or(Err(StateMachineInitializationError::Crypto))?;
+
+        let (coordinator_state, global_model) = { self.from_settings().await? };
+
+        Ok(self.init_state_machine(coordinator_state, global_model))
+    }
+
+    async fn from_settings(
+        &self,
+    ) -> StateMachineInitializationResult<(CoordinatorState, ModelUpdate)> {
+        // clear everything in the redis database
+        // should only be called for the first start or if we need to perform a
+        // hard reset.
+        self.redis_handle.connection().await.flush_db().await?;
+        Ok((
+            CoordinatorState::new(self.pet_settings, self.mask_settings, self.model_settings),
+            ModelUpdate::Invalidate,
+        ))
+    }
+
+    fn init_state_machine(
+        self,
+        coordinator_state: CoordinatorState,
+        global_model: ModelUpdate,
+    ) -> (StateMachine, RequestSender, EventSubscriber) {
+        let (event_publisher, event_subscriber) = EventPublisher::init(
+            coordinator_state.round_id,
+            coordinator_state.keys.clone(),
+            coordinator_state.round_params.clone(),
+            PhaseName::Idle,
+            global_model,
+        );
+
+        let (req_receiver, req_sender) = RequestReceiver::new();
+
+        let shared = Shared::new(
+            coordinator_state,
+            event_publisher,
+            req_receiver,
+            self.redis_handle,
+            #[cfg(feature = "model-persistence")]
+            self.s3_handle,
+            #[cfg(feature = "metrics")]
+            self.metrics_handle,
+        );
+
+        let state_machine = StateMachine::from(PhaseState::<Idle>::new(shared));
+        (state_machine, req_sender, event_subscriber)
+    }
+}
+
+#[cfg(feature = "model-persistence")]
+impl StateMachineInitializer {
+    /// Initializes a new [`StateMachine`] by trying to restore the
+    /// coordinator state along with the latest global model.
+    pub async fn init(
+        self,
+        no_restore: bool,
+    ) -> StateMachineInitializationResult<(StateMachine, RequestSender, EventSubscriber)> {
+        // crucial: init must be called before anything else in this module
+        // maybe we should create a wrapper around that function and put this into the xaynet::core crate
+        sodiumoxide::init().or(Err(StateMachineInitializationError::Crypto))?;
+
+        let (coordinator_state, global_model) = if no_restore {
+            info!("requested not to restore the coordinator state");
+            info!("initialize state machine from settings");
+            self.from_settings().await?
+        } else {
+            self.from_previous_state().await?
+        };
+
+        Ok(self.init_state_machine(coordinator_state, global_model))
+    }
+
+    pub async fn from_previous_state(
+        &self,
+    ) -> StateMachineInitializationResult<(CoordinatorState, ModelUpdate)> {
+        let (coordinator_state, global_model) = if let Some(coordinator_state) = self
+            .redis_handle
+            .connection()
+            .await
+            .get_coordinator_state()
+            .await?
+        {
+            self.try_restore_state(coordinator_state).await?
+        } else {
+            // no state in redis available seems to be a fresh start
+            self.from_settings().await?
+        };
+
+        Ok((coordinator_state, global_model))
+    }
+
+    async fn try_restore_state(
+        &self,
+        coordinator_state: CoordinatorState,
+    ) -> StateMachineInitializationResult<(CoordinatorState, ModelUpdate)> {
+        let latest_global_model_id = self
+            .redis_handle
+            .connection()
+            .await
+            .get_latest_global_model_id()
+            .await?;
+
+        let global_model_id = match latest_global_model_id {
+            // the state machine was shut down before completing a round
+            // we cannot use the round_id here because we increment the round_id after each restart
+            // that means even if the round id is larger than one, it doesn't mean that a
+            // round has ever been completed
+            None => {
+                debug!("apparently no round has been completed yet");
+                debug!("restore coordinator without a global model");
+                return Ok((coordinator_state, ModelUpdate::Invalidate));
+            }
+            Some(global_model_id) => global_model_id,
+        };
+
+        let global_model = self
+            .download_global_model(&coordinator_state, &global_model_id)
+            .await?;
+
+        debug!(
+            "restore coordinator with global model id: {}",
+            global_model_id
+        );
+        Ok((
+            coordinator_state,
+            ModelUpdate::New(std::sync::Arc::new(global_model)),
+        ))
+    }
+
+    async fn download_global_model(
+        &self,
+        coordinator_state: &CoordinatorState,
+        global_model_id: &str,
+    ) -> StateMachineInitializationResult<Model> {
+        if let Ok(global_model) = self.s3_handle.download_global_model(&global_model_id).await {
+            if Self::model_properties_matches_settings(coordinator_state, &global_model) {
+                Ok(global_model)
+            } else {
+                let error_msg = format!(
+                    "the size of global model with the id {} does not match with the value of the model size setting {} != {}",
+                    &global_model_id,
+                    global_model.len(),
+                    coordinator_state.model_size);
+
+                Err(StateMachineInitializationError::GlobalModelInvalid(
+                    error_msg,
+                ))
+            }
+        } else {
+            warn!("cannot find global model {}", &global_model_id);
+            // model id exists but we cannot find it in S3 / Minio
+            // here we better fail because if we restart a coordinator with an empty model
+            // the clients will throw a way there current global model and start from scratch
+            Err(StateMachineInitializationError::GlobalModelUnavailable)
+        }
+    }
+
+    fn model_properties_matches_settings(
+        coordinator_state: &CoordinatorState,
+        global_model: &Model,
+    ) -> bool {
+        // can we test more here?
+        coordinator_state.model_size == global_model.len()
     }
 }
 

@@ -11,7 +11,7 @@ use crate::{
     settings::{MaskSettings, ModelSettings, PetSettings},
     state_machine::{
         coordinator::CoordinatorState,
-        events::{EventPublisher, EventSubscriber},
+        events::{EventPublisher, EventSubscriber, ModelUpdate},
         phases::{PhaseName, Shared},
         requests::{RequestReceiver, RequestSender},
     },
@@ -92,6 +92,7 @@ pub async fn init_shared() -> (Shared, EventSubscriber, RequestSender) {
         coordinator_state.keys.clone(),
         coordinator_state.round_params.clone(),
         PhaseName::Idle,
+        ModelUpdate::Invalidate,
     );
 
     let (request_rx, request_tx) = RequestReceiver::new();

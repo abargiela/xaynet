@@ -30,7 +30,8 @@
 //!     "mask_dict": [ // sorted set
 //!         (mask_object_1, 2), // (mask: bincode encoded string, score/counter: number)
 //!         (mask_object_2, 1)
-//!     ]
+//!     ],
+//!     "latest_global_model": global_model_id
 //! }
 //! ```
 use crate::{
@@ -49,7 +50,7 @@ use crate::{
         SumDictAdd,
     },
 };
-use redis::{aio::ConnectionManager, AsyncCommands, IntoConnectionInfo, RedisResult, Script};
+use redis::{aio::ConnectionManager, AsyncCommands, IntoConnectionInfo, Script};
 use std::{collections::HashMap, sync::Arc};
 use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use xaynet_core::{
@@ -62,7 +63,7 @@ use xaynet_core::{
     UpdateParticipantPublicKey,
 };
 
-pub use redis::RedisError;
+pub use redis::{RedisError, RedisResult};
 
 #[derive(Clone)]
 pub struct Client {
@@ -132,6 +133,17 @@ impl Connection {
         // Possible return value in our case:
         // > Simple string reply: OK if SET was executed correctly.
         self.connection.set("coordinator_state", state).await
+    }
+
+    /// Retrieves a [`CoordinatorState`] or `None` when the [`CoordinatorState`] does not exist.
+    pub async fn get_coordinator_state(mut self) -> RedisResult<Option<CoordinatorState>> {
+        // https://redis.io/commands/get
+        // > Get the value of key. If the key does not exist the special value nil is returned.
+        //   An error is returned if the value stored at key is not a string, because GET only
+        //   handles string values.
+        // > Return value
+        //   Bulk string reply: the value of key, or nil when key does not exist.
+        self.connection.get("coordinator_state").await
     }
 
     /// Retrieves the [`SumDict`].
@@ -418,23 +430,34 @@ impl Connection {
         // https://redis.io/commands/ping
         redis::cmd("PING").query_async(&mut self.connection).await
     }
-}
 
-#[cfg(test)]
-// Functions that are not needed in the state machine but handy for testing.
-impl Connection {
-    // Retrieves a [`CoordinatorState`] or `None` when the [`CoordinatorState`] does not exist.
-    // currently only used for testing but later required for restoring the coordinator
-    async fn get_coordinator_state(mut self) -> RedisResult<Option<CoordinatorState>> {
+    pub async fn update_latest_global_model_id(mut self, global_model_id: &str) -> RedisResult<()> {
+        debug!("update latest global model with id {}", global_model_id);
+        // https://redis.io/commands/set
+        // > Set key to hold the string value. If key already holds a value,
+        //   it is overwritten, regardless of its type.
+        // Possible return value in our case:
+        // > Simple string reply: OK if SET was executed correctly.
+        self.connection
+            .set("latest_global_model", global_model_id)
+            .await
+    }
+
+    pub async fn get_latest_global_model_id(mut self) -> RedisResult<Option<String>> {
+        debug!("get latest global model id");
         // https://redis.io/commands/get
         // > Get the value of key. If the key does not exist the special value nil is returned.
         //   An error is returned if the value stored at key is not a string, because GET only
         //   handles string values.
         // > Return value
         //   Bulk string reply: the value of key, or nil when key does not exist.
-        self.connection.get("coordinator_state").await
+        self.connection.get("latest_global_model").await
     }
+}
 
+#[cfg(test)]
+// Functions that are not needed in the state machine but handy for testing.
+impl Connection {
     // Removes an entry in the [`SumDict`].
     //
     // Returns [`SumDictDelete(Ok(()))`] if field was deleted or
@@ -541,6 +564,22 @@ mod tests {
             .unwrap();
 
         assert_eq!(set_state, get_state)
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn integration_get_coordinator_empty() {
+        // test the writing and reading of the coordinator state
+        let client = init_client().await;
+
+        let get_state = client
+            .connection()
+            .await
+            .get_coordinator_state()
+            .await
+            .unwrap();
+
+        assert_eq!(None, get_state)
     }
 
     #[tokio::test]

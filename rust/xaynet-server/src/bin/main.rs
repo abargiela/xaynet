@@ -7,7 +7,7 @@ use xaynet_server::{
     rest,
     services,
     settings::Settings,
-    state_machine::StateMachine,
+    state_machine::StateMachineInitializer,
     storage::redis,
 };
 
@@ -26,6 +26,12 @@ struct Opt {
     /// Path of the configuration file
     #[structopt(short, parse(from_os_str))]
     config_path: PathBuf,
+    #[cfg(feature = "model-persistence")]
+    /// Prevents the restoring of the coordinator state.
+    /// Instead, the state is reset and the coordinator
+    /// is started with the settings from the configuration file.
+    #[structopt(long)]
+    no_restore: bool,
 }
 
 #[tokio::main]
@@ -80,14 +86,8 @@ async fn main() {
     let redis = redis::Client::new(redis_settings.url, 100)
         .await
         .expect("failed to establish a connection to Redis");
-    redis
-        .connection()
-        .await
-        .flush_db()
-        .await
-        .expect("failed to flush the Redis database");
 
-    let (state_machine, requests_tx, event_subscriber) = StateMachine::new(
+    let smi = StateMachineInitializer::new(
         pet_settings,
         mask_settings,
         model_settings,
@@ -96,8 +96,15 @@ async fn main() {
         s3,
         #[cfg(feature = "metrics")]
         metrics_sender,
-    )
-    .unwrap();
+    );
+    #[cfg(not(feature = "model-persistence"))]
+    let smi = smi.init();
+    #[cfg(feature = "model-persistence")]
+    let smi = smi.init(opt.no_restore);
+
+    let (state_machine, requests_tx, event_subscriber) =
+        smi.await.expect("failed to initialize state machine");
+
     let fetcher = services::fetchers::fetcher(&event_subscriber);
     let message_handler =
         services::messages::PetMessageHandler::new(&event_subscriber, requests_tx);
