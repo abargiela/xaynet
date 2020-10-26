@@ -24,7 +24,7 @@ jobs:
         with:
           route: ${{ github.event.issue.pull_request.url }}
         env:
-          GITHUB_TOKEN: ${{ secrets.   }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Get PR metadata
         id: pr_data
         run: |
