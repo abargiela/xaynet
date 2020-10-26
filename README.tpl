@@ -2,8 +2,6 @@
 
 ![Xaynet banner](./assets/xaynet_banner.png)
 
-
-
 # {{crate}}
 
 {{readme}}
