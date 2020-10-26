@@ -431,8 +431,8 @@ impl Connection {
         redis::cmd("PING").query_async(&mut self.connection).await
     }
 
-    pub async fn update_latest_global_model_id(mut self, global_model_id: &str) -> RedisResult<()> {
-        debug!("update latest global model with id {}", global_model_id);
+    pub async fn set_latest_global_model_id(mut self, global_model_id: &str) -> RedisResult<()> {
+        debug!("set latest global model with id {}", global_model_id);
         // https://redis.io/commands/set
         // > Set key to hold the string value. If key already holds a value,
         //   it is overwritten, regardless of its type.
@@ -569,7 +569,7 @@ mod tests {
     #[tokio::test]
     #[serial]
     async fn integration_get_coordinator_empty() {
-        // test the writing and reading of the coordinator state
+        // test the reading of a non existing coordinator state
         let client = init_client().await;
 
         let get_state = client
@@ -1071,5 +1071,46 @@ mod tests {
 
         let res = client.connection().await.ping().await;
         assert!(res.is_ok())
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn integration_set_and_get_latest_global_model_id() {
+        // test the writing and reading of the global model id
+        let client = init_client().await;
+
+        let set_id = "global_model_id";
+        client
+            .connection()
+            .await
+            .set_latest_global_model_id(set_id)
+            .await
+            .unwrap();
+
+        let get_id = client
+            .connection()
+            .await
+            .get_latest_global_model_id()
+            .await
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(set_id, get_id)
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn integration_get_latest_global_model_id_empty() {
+        // test the reading of a non existing global model id
+        let client = init_client().await;
+
+        let get_id = client
+            .connection()
+            .await
+            .get_latest_global_model_id()
+            .await
+            .unwrap();
+
+        assert_eq!(None, get_id)
     }
 }

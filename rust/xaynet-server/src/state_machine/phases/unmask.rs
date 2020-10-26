@@ -80,7 +80,7 @@ impl Phase for PhaseState<Unmask> {
                 .redis
                 .connection()
                 .await
-                .update_latest_global_model_id(&key)
+                .set_latest_global_model_id(&key)
                 .await
                 .map_err(|err| warn!("failed to update latest global model id: {}", err));
         }
