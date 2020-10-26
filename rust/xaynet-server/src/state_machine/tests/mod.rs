@@ -105,7 +105,8 @@ async fn integration_full_round() {
         let s3_model = eio
             .s3
             .download_global_model(&format!("{}_{}", round_id, round_seed_hex))
-            .await;
+            .await
+            .unwrap();
         assert!(
             matches!(events.model_listener().get_latest().event, super::events::ModelUpdate::New(broadcasted_model) if s3_model == *broadcasted_model)
         );
