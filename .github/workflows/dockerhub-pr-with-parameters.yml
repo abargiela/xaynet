@@ -41,7 +41,7 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
           dockerfile: docker/Dockerfile
           cache_froms: buildpack-deps:stable-curl
-          repository: xaynetwork/xaynet
+          repository: abargiela/test-xay
           tags: pr-${{ steps.pr_data.outputs.branch }}
           push: true
           build_args: '${{ steps.command.outputs.command-arguments }}'
