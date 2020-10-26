@@ -84,7 +84,7 @@ impl Client {
     ///     },
     /// };
     ///
-    /// let store = Client::new(s3_settings);
+    /// let store = Client::new(s3_settings).unwrap();
     /// ```
     pub fn new(settings: S3Settings) -> S3Result<Self> {
         let credentials_provider =
@@ -323,15 +323,61 @@ pub(in crate) mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn integration_test_upload_global_model() {
+    async fn integration_test_upload_and_download_global_model() {
         let client = create_client().await;
 
         let global_model = create_global_model(10);
         let round_seed = hex::encode(RoundSeed::generate().as_slice());
+        let global_model_id = format!("{}_{}", 1, round_seed);
 
         let res = client
-            .upload_global_model(&format!("{}_{}", 1, round_seed), &global_model)
+            .upload_global_model(&global_model_id, &global_model)
             .await;
-        assert!(res.is_ok())
+        assert!(res.is_ok());
+
+        let downloaded_global_model = client
+            .download_global_model(&global_model_id)
+            .await
+            .unwrap();
+        assert_eq!(global_model, downloaded_global_model)
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn integration_test_download_global_model_non_existent() {
+        let client = create_client().await;
+
+        let round_seed = hex::encode(RoundSeed::generate().as_slice());
+        let global_model_id = format!("{}_{}", 1, round_seed);
+
+        let res = client.download_global_model(&global_model_id).await;
+        assert!(matches!(res, Err(S3Error::Download(_))))
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn integration_test_override_global_model() {
+        let client = create_client().await;
+
+        let global_model = create_global_model(10);
+        let round_seed = hex::encode(RoundSeed::generate().as_slice());
+        let global_model_id = format!("{}_{}", 1, round_seed);
+
+        let res = client
+            .upload_global_model(&global_model_id, &global_model)
+            .await;
+        assert!(res.is_ok());
+
+        let global_model = create_global_model(20);
+        let res = client
+            .upload_global_model(&global_model_id, &global_model)
+            .await;
+        assert!(res.is_ok());
+
+        let downloaded_global_model = client
+            .download_global_model(&global_model_id)
+            .await
+            .unwrap();
+        assert_eq!(global_model, downloaded_global_model)
     }
 }

@@ -120,7 +120,7 @@ async fn integration_full_round() {
             .await
             .unwrap()
             .unwrap();
-        assert!(global_model_id == get_global_model_id);
+        assert_eq!(global_model_id, get_global_model_id);
     }
 
     assert!(state_machine.is_idle());
