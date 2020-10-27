@@ -46,6 +46,15 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           ref: ${{ steps.pr_data.outputs.branch }}
 
+      - name: Find and Replace
+        uses: jacobtomlinson/gha-find-replace@master
+        with:
+          find: "newTag: development"
+          replace: "newTag: pr-${{ steps.comment-branch.outputs.head_ref }}"
+          include: "kustomization.yaml"
+      - name: Check replace
+        run: cat k8s/coordinator/development/kustomization.yaml
+
       - name: build-tag-push-pr
         uses: docker/build-push-action@v1
         with:
@@ -58,11 +67,7 @@ jobs:
           push: true
           build_args: '${{ steps.command.outputs.command-arguments }}'
              
-      - name: Find and Replace
-        uses: jacobtomlinson/gha-find-replace@master
-        with:
-          find: "newTag: development"
-          replace: "newTag: pr-${{ steps.comment-branch.outputs.head_ref }}"
-          include: "kustomization.yaml"
-          
+
+        
+        
           
