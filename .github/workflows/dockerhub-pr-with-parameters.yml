@@ -52,3 +52,12 @@ jobs:
           tags: pr-${{ steps.pr_data.outputs.branch }}
           push: true
           build_args: '${{ steps.command.outputs.command-arguments }}'
+             
+      - name: Find and Replace
+        uses: jacobtomlinson/gha-find-replace@master
+        with:
+          find: "newTag: development"
+          replace: "newTag: pr-${{ steps.comment-branch.outputs.head_ref }}"
+          include: "kustomization.yaml"
+          
+          
