@@ -18,7 +18,6 @@ jobs:
           permission-level: admin
       - name: Act on the command
         run: echo "The command was '${{ steps.command.outputs.command-name }}' with arguments '${{ steps.command.outputs.command-arguments }}'"
-      # Build container
       - name: GitHub API Request
       - uses: xt0rted/pull-request-comment-branch@v1
         id: comment-branch
