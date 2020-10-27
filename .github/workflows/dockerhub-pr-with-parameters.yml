@@ -14,22 +14,27 @@ jobs:
           command: build_pr
           reaction: "true"
           reaction-type: "eyes"
-          allow-edits: "true"
+          allow-edits: "false"
           permission-level: maintain
       - name: Act on the command
         run: echo "The command was '${{ steps.command.outputs.command-name }}' with arguments '${{ steps.command.outputs.command-arguments }}'"
       # Build container
-      - name: GitHub API Request
-        uses: octokit/request-action@v2.0.0
-        id: request
+
+
+      - uses: xt0rted/pull-request-comment-branch@v1
+        id: comment-branch
         with:
-          route: ${{ github.event.issue.pull_request.url }}
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      - name: Get PR metadata
-        id: pr_data
-        run: |
-          echo "::set-output name=branch::${{ fromJson(steps.request.outputs.data).head.ref }}"
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: actions/checkout@v2
+        if: success()
+        with:
+          ref: ${{ steps.comment-branch.outputs.head_ref }}
+
+      - run: git rev-parse --abbrev-ref HEAD
+      - run: git rev-parse --verify HEAD
+
+
       - name: Clone branch of the PR
         uses: actions/checkout@v2
         with:
